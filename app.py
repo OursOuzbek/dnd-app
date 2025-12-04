@@ -5,7 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from pathlib import Path
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="D&D Manager V19", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="D&D Manager V21", page_icon="🐉", layout="wide")
 
 # --- CONNEXION HYBRIDE ---
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -78,10 +78,8 @@ def calculer_bm(niveau):
 def make_dirty():
     st.session_state.unsaved_changes = True
 
-# --- CALLBACKS (SYNC WIDGETS) ---
-
+# --- CALLBACKS ---
 def cb_manual_input(keys_path, widget_key):
-    """Met à jour la donnée quand le widget change"""
     val = st.session_state[widget_key]
     ref = st.session_state.perso
     for key in keys_path[:-1]: ref = ref[key]
@@ -127,18 +125,13 @@ def cb_change_classe():
     st.session_state.perso["infos"]["classe"] = new_classe
     make_dirty()
 
-# --- COMPOSANT VISUEL ÉPURÉ (V19) ---
+# --- COMPOSANTS VISUELS ---
 def compteur_propre(label, keys_path, min_val=0, max_val=1000):
-    """Un seul champ number_input propre avec callback"""
     val = st.session_state.perso
     for k in keys_path: val = val[k]
-    
     widget_key = f"w_clean_{keys_path}"
-    
-    # On utilise le label natif de Streamlit, plus propre
     st.number_input(label, value=val, min_value=min_val, max_value=max_val, 
                     key=widget_key, on_change=cb_manual_input, args=(keys_path, widget_key))
-
 
 # --- GESTION ÉTAT ---
 if "db" not in st.session_state:
@@ -161,7 +154,7 @@ def action_sauvegarder():
             f["max"] = bm
             if f["actuel"] > bm: f["actuel"] = bm
     st.session_state.db[nom] = st.session_state.perso
-    with st.spinner('Sauvegarde Cloud...'):
+    with st.spinner('Sauvegarde...'):
         sauvegarder_donnees(st.session_state.db)
     st.session_state.current_char_id = nom
     st.session_state.unsaved_changes = False 
@@ -171,7 +164,7 @@ def action_sauvegarder():
 def action_supprimer_perso(nom_a_supprimer):
     if nom_a_supprimer in st.session_state.db:
         del st.session_state.db[nom_a_supprimer]
-        with st.spinner('Suppression Cloud...'):
+        with st.spinner('Suppression...'):
             sauvegarder_donnees(st.session_state.db)
         st.toast(f"{nom_a_supprimer} supprimé.")
         st.rerun()
@@ -184,19 +177,19 @@ def action_quitter_sans_sauver():
 # --- MODALES ---
 @st.dialog("Confirmer la suppression")
 def dialog_suppression(nom_perso):
-    st.warning(f"Supprimer **{nom_perso}** du Cloud ?")
+    st.warning(f"Supprimer **{nom_perso}** ?")
     col1, col2 = st.columns(2)
     if col1.button("🗑️ Oui", type="primary"): action_supprimer_perso(nom_perso)
     if col2.button("Annuler"): st.rerun()
 
 @st.dialog("Quitter sans sauvegarder ?")
 def dialog_confirm_exit():
-    st.warning("Vous avez des modifications non enregistrées.")
+    st.warning("Modifs non enregistrées.")
     col1, col2 = st.columns(2)
-    if col1.button("Quitter sans sauver"): action_quitter_sans_sauver()
+    if col1.button("Quitter"): action_quitter_sans_sauver()
     if col2.button("Rester"): st.rerun()
 
-@st.dialog("Confirmer le Repos")
+@st.dialog("Repos")
 def dialog_repos(type_repos):
     st.write(f"Lancer un repos **{type_repos}** ?")
     col1, col2 = st.columns(2)
@@ -226,10 +219,10 @@ def dialog_repos(type_repos):
 # ================= INTERFACE =================
 
 if st.session_state.current_char_id is None:
-    st.title("🐉 D&D Manager - V19 (Clean UI)")
+    st.title("🐉 D&D Manager")
     col_g, col_d = st.columns([1, 1])
     with col_g:
-        st.subheader("Héros (Google Sheets)")
+        st.subheader("Héros")
         liste_persos = list(st.session_state.db.keys())
         if liste_persos:
             for p_nom in liste_persos:
@@ -243,7 +236,7 @@ if st.session_state.current_char_id is None:
                         st.rerun()
                     if c3.button("🗑️", key=f"del_{p_nom}", help="Supprimer"):
                         dialog_suppression(p_nom)
-        else: st.info("Aucun personnage trouvé.")
+        else: st.info("Aucun personnage.")
 
     with col_d:
         st.subheader("Création")
@@ -254,19 +247,21 @@ if st.session_state.current_char_id is None:
                 st.session_state.perso["infos"]["nom"] = nom_new
                 st.session_state.current_char_id = nom_new
                 action_sauvegarder() 
-            elif nom_new in st.session_state.db: st.error("Ce nom existe déjà !")
+            elif nom_new in st.session_state.db: st.error("Existe déjà !")
 
 else:
     if "hp" not in st.session_state.perso: st.session_state.perso["hp"] = {"max": 10, "actuel": 10, "temp": 0}
 
-    c1, c2, c3 = st.columns([1, 6, 1])
-    if c1.button("⬅️ Accueil"):
+    # --- BARRE DU HAUT ---
+    c_back, c_empty, c_save = st.columns([1, 4, 1])
+    if c_back.button("⬅️ Accueil"):
         if st.session_state.unsaved_changes: dialog_confirm_exit()
         else: action_quitter_sans_sauver()
     
-    btn_label = "Sauvegarder ☁️ *" if st.session_state.unsaved_changes else "Sauvegarder ☁️"
+    # Correction V21 : Label uniforme
+    btn_label = "Sauvegarder *" if st.session_state.unsaved_changes else "Sauvegarder"
     btn_type = "primary" if st.session_state.unsaved_changes else "secondary"
-    if c3.button(btn_label, type=btn_type, use_container_width=True): action_sauvegarder()
+    if c_save.button(btn_label, type=btn_type, use_container_width=True): action_sauvegarder()
 
     st.divider()
 
@@ -281,49 +276,54 @@ else:
     idx_class = LISTE_CLASSES.index(current_class_val) if current_class_val in LISTE_CLASSES else 0
     col3.selectbox("Classe", LISTE_CLASSES, index=idx_class, key="widget_classe", on_change=cb_change_classe)
 
-    with col4:
-        # V19 : Juste un champ number_input propre
-        compteur_propre("Niveau", ["infos", "niveau"], 1, 20)
+    with col4: compteur_propre("Niveau", ["infos", "niveau"], 1, 20)
     
     bm = calculer_bm(st.session_state.perso["infos"]["niveau"])
-    col5.metric("Bonus Maîtrise", f"+{bm}")
+    col5.metric("BM", f"+{bm}")
 
-    # --- POINTS DE VIE (V19 CLEAN) ---
-    with st.container(border=True):
-        st.markdown("### ❤️ Points de Vie")
-        hp1, hp2, hp3 = st.columns(3)
-        with hp1: compteur_propre("PV Max", ["hp", "max"], 1, 999)
-        with hp2: compteur_propre("PV Actuel", ["hp", "actuel"], -999, 999)
-        with hp3: compteur_propre("PV Temporaire", ["hp", "temp"], 0, 999)
+    # --- LAYOUT COMPACT (PV & DV) ---
+    zone_pv, zone_dv = st.columns([1.5, 1]) 
 
-        cur = st.session_state.perso["hp"]["actuel"]
-        max_pv = st.session_state.perso["hp"]["max"]
-        if max_pv > 0:
-            ratio = float(cur) / float(max_pv)
-            st.progress(max(0.0, min(1.0, ratio)))
+    with zone_pv:
+        with st.container(border=True):
+            st.markdown("### ❤️ Points de Vie")
+            hp1, hp2, hp3 = st.columns(3)
+            with hp1: compteur_propre("Max", ["hp", "max"], 1, 999)
+            with hp2: compteur_propre("Actuel", ["hp", "actuel"], -999, 999)
+            with hp3: compteur_propre("Temp", ["hp", "temp"], 0, 999)
 
-    # --- DÉS DE VIE ---
-    selected_class = st.session_state.perso["infos"]["classe"]
-    die_type = CLASSES_DATA.get(selected_class, "d8")
-    dv_max = st.session_state.perso["infos"]["niveau"]
-    dv_used = st.session_state.perso.get("hit_dice_used", 0)
+            cur = st.session_state.perso["hp"]["actuel"]
+            max_pv = st.session_state.perso["hp"]["max"]
+            if max_pv > 0:
+                ratio = float(cur) / float(max_pv)
+                st.progress(max(0.0, min(1.0, ratio)))
 
-    with st.container(border=True):
-        cdv1, cdv2, cdv3 = st.columns([2, 4, 2])
-        cdv1.markdown(f"### 🎲 Dés de Vie ({die_type})")
-        dv_restants = dv_max - dv_used
-        cdv2.progress(dv_restants / dv_max if dv_max > 0 else 0)
-        cdv2.caption(f"Restants : {dv_restants} / {dv_max}")
-        b_dv1, b_dv2 = cdv3.columns(2)
-        b_dv1.button("Utiliser", on_click=cb_update_dv, args=(1, dv_max), disabled=(dv_used >= dv_max))
-        b_dv2.button("Récup.", on_click=cb_update_dv, args=(-1, dv_max), disabled=(dv_used <= 0))
+    with zone_dv:
+        with st.container(border=True):
+            selected_class = st.session_state.perso["infos"]["classe"]
+            die_type = CLASSES_DATA.get(selected_class, "d8")
+            dv_max = st.session_state.perso["infos"]["niveau"]
+            dv_used = st.session_state.perso.get("hit_dice_used", 0)
+            
+            # Correction V21 : Titre complet
+            cdv_titre, cdv_btn = st.columns([1, 1])
+            cdv_titre.markdown(f"### 🎲 Dés de Vie ({die_type})")
+            
+            dv_restants = dv_max - dv_used
+            st.caption(f"Restants : {dv_restants} / {dv_max}")
+            st.progress(dv_restants / dv_max if dv_max > 0 else 0)
+            
+            b_use, b_recup = st.columns(2)
+            b_use.button("Utiliser", on_click=cb_update_dv, args=(1, dv_max), disabled=(dv_used >= dv_max), use_container_width=True)
+            b_recup.button("Récup.", on_click=cb_update_dv, args=(-1, dv_max), disabled=(dv_used <= 0), use_container_width=True)
 
-    st.write("")
     c_rest1, c_rest2 = st.columns(2)
     if c_rest1.button("🍎 Repos Court", use_container_width=True): dialog_repos("Court")
     if c_rest2.button("💤 Repos Long", type="primary", use_container_width=True): dialog_repos("Long")
 
     st.divider()
+    
+    # --- ONGLETS ---
     tab_spells, tab_feats, tab_items = st.tabs(["🔮 Sorts", "⚔️ Compétences", "🎒 Inventaire"])
 
     with tab_spells:
@@ -348,7 +348,7 @@ else:
                             st.session_state.perso["spells"][lvl_str]["actuel"] = new_max
                         curr = st.session_state.perso["spells"][lvl_str]["actuel"]
                         display_str = "🟦 " * curr + "⬛ " * (new_max - curr)
-                        st.markdown(f"<div style='font-size: 28px; line-height: 1.5; margin-bottom: 10px;'>{display_str}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='font-size: 24px; line-height: 1.5; margin-bottom: 5px;'>{display_str}</div>", unsafe_allow_html=True)
                         b1, b2 = st.columns(2)
                         b1.button("Utiliser", key=f"use_{lvl}", on_click=cb_update_spell, args=(lvl_str, -1), disabled=(curr==0))
                         b2.button("Restaurer", key=f"rest_{lvl}", on_click=cb_update_spell, args=(lvl_str, 1), disabled=(curr==new_max))
@@ -357,7 +357,7 @@ else:
         with st.expander("Ajouter Compétence"):
             c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
             n_name = c1.text_input("Nom", key="nf_name")
-            link_pb = c2.checkbox("Lier au BM ?", key="nf_link")
+            link_pb = c2.checkbox("Lier BM", key="nf_link")
             val_max = bm if link_pb else 1
             n_max = c2.number_input("Max", 1, 50, val_max, disabled=link_pb, key="nf_max")
             n_rest = c3.selectbox("Reset", ["Court", "Long"], key="nf_rest")
@@ -377,7 +377,7 @@ else:
                     edit_max_val = bm if edit_link else feat["max"]
                     edit_max = ec2.number_input("Max", 1, 50, edit_max_val, disabled=edit_link, key=f"ed_m_{i}")
                     edit_rest = ec3.selectbox("Reset", ["Court", "Long"], index=0 if feat["repos"]=="Court" else 1, key=f"ed_r_{i}")
-                    if ec4.button("💾 Sauver", key=f"ed_save_{i}"):
+                    if ec4.button("💾", key=f"ed_save_{i}"):
                         feat["nom"] = new_nom
                         feat["linked_pb"] = edit_link
                         feat["max"] = edit_max
@@ -386,30 +386,27 @@ else:
                         make_dirty()
                         st.rerun()
                 else:
-                    c_top1, c_top2 = st.columns([4, 2])
-                    badges = f"({feat['repos']})"
-                    if feat.get("linked_pb"): badges += " [Lien BM]"
-                    c_top1.write(f"**{feat['nom']}** {badges}")
-                    
-                    b_edit, b_del, b_up, b_down = c_top2.columns(4)
-                    if b_edit.button("✍️", key=f"ed_{i}"):
-                        st.session_state.edit_mode[f"feat_{i}"] = True
-                        st.rerun()
-                    if b_del.button("🗑️", key=f"del_{i}"):
-                        st.session_state.perso["features"].pop(i)
-                        make_dirty()
-                        st.rerun()
-                    if i > 0: 
-                        b_up.button("⬆️", key=f"up_{i}", on_click=cb_move_item, args=("features", i, -1))
-                    if i < len(feats) - 1:
-                        b_down.button("⬇️", key=f"down_{i}", on_click=cb_move_item, args=("features", i, 1))
-
-                    if feat['max'] > 0: st.progress(feat['actuel'] / feat['max'])
-
-                    c_act1, c_act2 = st.columns(2)
-                    c_act1.button("Utiliser", key=f"use_feat_{i}", on_click=cb_update_feat, args=(i, -1), disabled=(feat['actuel']==0), use_container_width=True)
-                    c_act2.button("Restaurer", key=f"rest_feat_{i}", on_click=cb_update_feat, args=(i, 1), disabled=(feat['actuel']==feat['max']), use_container_width=True)
-                    st.markdown(f"<div style='text-align: center;'>{feat['actuel']} / {feat['max']}</div>", unsafe_allow_html=True)
+                    c_main, c_up, c_down = st.columns([10, 1, 1])
+                    with c_main:
+                        c1, c_min, c_val, c_plus, c_edit, c_del = st.columns([4, 0.7, 1, 0.7, 0.5, 0.5])
+                        badges = f"({feat['repos']})"
+                        if feat.get("linked_pb"): badges += " [BM]"
+                        c1.write(f"**{feat['nom']}** {badges}")
+                        if feat['max'] > 0: c1.progress(feat['actuel'] / feat['max'])
+                        c_min.button("➖", key=f"fm_{i}", on_click=cb_update_feat, args=(i, -1), disabled=(feat['actuel']==0))
+                        c_val.write(f"{feat['actuel']} / {feat['max']}")
+                        c_plus.button("➕", key=f"fp_{i}", on_click=cb_update_feat, args=(i, 1), disabled=(feat['actuel']==feat['max']))
+                        if c_edit.button("✍️", key=f"edit_btn_{i}"):
+                            st.session_state.edit_mode[f"feat_{i}"] = True
+                            st.rerun()
+                        if c_del.button("🗑️", key=f"del_feat_{i}"):
+                            st.session_state.perso["features"].pop(i)
+                            make_dirty()
+                            st.rerun()
+                    with c_up:
+                        if i > 0: st.button("⬆️", key=f"f_up_{i}", on_click=cb_move_item, args=("features", i, -1))
+                    with c_down:
+                        if i < len(feats) - 1: st.button("⬇️", key=f"f_down_{i}", on_click=cb_move_item, args=("features", i, 1))
 
     with tab_items:
         with st.expander("Ajouter Objet"):
@@ -425,20 +422,19 @@ else:
         if not items: st.info("Inventaire vide.")
         for i, item in enumerate(items):
             with st.container(border=True):
-                c_top1, c_top2 = st.columns([4, 2])
-                c_top1.write(f"**{item['nom']}** ({item['repos']})")
-                
-                b_del, b_up, b_down = c_top2.columns([1, 1, 1])
-                if b_del.button("🗑️", key=f"del_i_{i}"):
-                    st.session_state.perso["items"].pop(i)
-                    make_dirty()
-                    st.rerun()
-                if i > 0: b_up.button("⬆️", key=f"up_i_{i}", on_click=cb_move_item, args=("items", i, -1))
-                if i < len(items) - 1: b_down.button("⬇️", key=f"down_i_{i}", on_click=cb_move_item, args=("items", i, 1))
-
-                if item['max'] > 0: st.progress(item['actuel'] / item['max'])
-
-                c_act1, c_act2 = st.columns(2)
-                c_act1.button("Utiliser", key=f"use_item_{i}", on_click=cb_update_item, args=(i, -1), disabled=(item['actuel']==0), use_container_width=True)
-                c_act2.button("Restaurer", key=f"rest_item_{i}", on_click=cb_update_item, args=(i, 1), disabled=(item['actuel']==item['max']), use_container_width=True)
-                st.markdown(f"<div style='text-align: center;'>{item['actuel']} / {item['max']}</div>", unsafe_allow_html=True)
+                c_main, c_up, c_down = st.columns([10, 1, 1])
+                with c_main:
+                    c1, c_min, c_val, c_plus, c_del = st.columns([4, 0.7, 1, 0.7, 0.5])
+                    c1.write(f"**{item['nom']}** ({item['repos']})")
+                    if item['max'] > 0: c1.progress(item['actuel'] / item['max'])
+                    c_min.button("➖", key=f"im_{i}", on_click=cb_update_item, args=(i, -1), disabled=(item['actuel']==0))
+                    c_val.write(f"{item['actuel']} / {item['max']}")
+                    c_plus.button("➕", key=f"ip_{i}", on_click=cb_update_item, args=(i, 1), disabled=(item['actuel']==item['max']))
+                    if c_del.button("🗑️", key=f"del_item_{i}"):
+                        st.session_state.perso["items"].pop(i)
+                        make_dirty()
+                        st.rerun()
+                with c_up:
+                    if i > 0: st.button("⬆️", key=f"i_up_{i}", on_click=cb_move_item, args=("items", i, -1))
+                with c_down:
+                    if i < len(items) - 1: st.button("⬇️", key=f"i_down_{i}", on_click=cb_move_item, args=("items", i, 1))
