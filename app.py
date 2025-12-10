@@ -3,9 +3,10 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from pathlib import Path
+import math
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="D&D Manager V21", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="D&D Manager V23", page_icon="🐉", layout="wide")
 
 # --- CONNEXION HYBRIDE ---
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -37,6 +38,14 @@ CLASSES_DATA = {
 }
 LISTE_CLASSES = sorted(list(CLASSES_DATA.keys()))
 
+# Table d'XP
+XP_TABLE = {
+    1: 300, 2: 900, 3: 2700, 4: 6500, 5: 14000,
+    6: 23000, 7: 34000, 8: 48000, 9: 64000, 10: 85000,
+    11: 100000, 12: 120000, 13: 140000, 14: 165000, 15: 195000,
+    16: 225000, 17: 265000, 18: 305000, 19: 355000, 20: 0
+}
+
 # --- FONCTIONS BACKEND ---
 def charger_donnees():
     if sheet is None: return {}
@@ -64,6 +73,7 @@ def sauvegarder_donnees(data):
 def nouveau_perso_template():
     return {
         "infos": {"nom": "Nouveau Héros", "race": "Humain", "classe": "Guerrier", "niveau": 1},
+        "xp": 0,
         "hp": {"max": 10, "actuel": 10, "temp": 0},
         "hit_dice_used": 0,
         "features": [],
@@ -84,6 +94,11 @@ def cb_manual_input(keys_path, widget_key):
     ref = st.session_state.perso
     for key in keys_path[:-1]: ref = ref[key]
     ref[keys_path[-1]] = val
+    make_dirty()
+
+def cb_xp_input():
+    new_val = st.session_state["widget_xp_val"]
+    st.session_state.perso["xp"] = new_val
     make_dirty()
 
 def cb_update_spell(lvl, change):
@@ -124,6 +139,18 @@ def cb_change_classe():
     new_classe = st.session_state.widget_classe
     st.session_state.perso["infos"]["classe"] = new_classe
     make_dirty()
+
+def cb_apply_xp_gain():
+    """Applique le calcul du dialog XP et met à jour l'affichage"""
+    total = st.session_state.xp_calc_total
+    nb_joueurs = st.session_state.xp_calc_nb
+    if nb_joueurs > 0:
+        gain = math.ceil(total / nb_joueurs)
+        st.session_state.perso["xp"] += gain
+        # FIX V23 : On force la mise à jour du widget XP pour que l'affichage suive
+        st.session_state["widget_xp_val"] = st.session_state.perso["xp"]
+        make_dirty()
+        st.toast(f"Gain de {gain} XP appliqué !")
 
 # --- COMPOSANTS VISUELS ---
 def compteur_propre(label, keys_path, min_val=0, max_val=1000):
@@ -216,6 +243,19 @@ def dialog_repos(type_repos):
         st.rerun()
     if col2.button("Annuler"): st.rerun()
 
+@st.dialog("Calcul Gain XP ⚡")
+def dialog_xp():
+    st.write("Fin de session ? Faisons les comptes !")
+    st.number_input("XP Totale du groupe", min_value=0, step=100, key="xp_calc_total")
+    st.number_input("Nombre de joueurs", min_value=1, value=4, key="xp_calc_nb")
+    
+    col1, col2 = st.columns(2)
+    if col1.button("Valider ✅", type="primary"):
+        cb_apply_xp_gain()
+        st.rerun()
+    if col2.button("Annuler"):
+        st.rerun()
+
 # ================= INTERFACE =================
 
 if st.session_state.current_char_id is None:
@@ -251,22 +291,23 @@ if st.session_state.current_char_id is None:
 
 else:
     if "hp" not in st.session_state.perso: st.session_state.perso["hp"] = {"max": 10, "actuel": 10, "temp": 0}
+    if "xp" not in st.session_state.perso: st.session_state.perso["xp"] = 0
 
-    # --- BARRE DU HAUT ---
     c_back, c_empty, c_save = st.columns([1, 4, 1])
     if c_back.button("⬅️ Accueil"):
         if st.session_state.unsaved_changes: dialog_confirm_exit()
         else: action_quitter_sans_sauver()
     
-    # Correction V21 : Label uniforme
     btn_label = "Sauvegarder *" if st.session_state.unsaved_changes else "Sauvegarder"
     btn_type = "primary" if st.session_state.unsaved_changes else "secondary"
     if c_save.button(btn_label, type=btn_type, use_container_width=True): action_sauvegarder()
 
     st.divider()
 
-    # --- INFOS ---
-    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+    # --- INFOS COMPACTES (V23) ---
+    # Nouvelle répartition pour serrer les boulons
+    # Nom (1.5) | Race (1) | Classe (1) | Niv (0.8) | XP (1.7) | BM (0.5)
+    col1, col2, col3, col4, col5, col6 = st.columns([1.5, 1, 1, 0.8, 1.7, 0.5])
     def dirty_callback(): make_dirty()
     
     st.session_state.perso["infos"]["nom"] = col1.text_input("Nom", st.session_state.perso["infos"]["nom"], on_change=dirty_callback)
@@ -278,8 +319,26 @@ else:
 
     with col4: compteur_propre("Niveau", ["infos", "niveau"], 1, 20)
     
-    bm = calculer_bm(st.session_state.perso["infos"]["niveau"])
-    col5.metric("BM", f"+{bm}")
+    # --- SECTION XP ALIGNÉE ---
+    with col5:
+        lvl_actuel = st.session_state.perso["infos"]["niveau"]
+        xp_target = XP_TABLE.get(lvl_actuel, "MAX")
+        
+        # On divise la colonne XP en deux sous-blocs serrés : [Input XP (80%)] [Bouton (20%)]
+        cx_in, cx_btn = st.columns([4, 1])
+        
+        with cx_in:
+            st.number_input(f"XP (Palier: {xp_target})", value=st.session_state.perso["xp"], 
+                            key="widget_xp_val", on_change=cb_xp_input)
+        with cx_btn:
+            # Astuce pour aligner le bouton avec l'input (car le label prend de la place)
+            st.write("") # Petit espace vertical
+            st.write("") 
+            if st.button("⚡", help="Calculer gain d'XP"):
+                dialog_xp()
+
+    bm = calculer_bm(lvl_actuel)
+    col6.metric("BM", f"+{bm}")
 
     # --- LAYOUT COMPACT (PV & DV) ---
     zone_pv, zone_dv = st.columns([1.5, 1]) 
@@ -305,9 +364,8 @@ else:
             dv_max = st.session_state.perso["infos"]["niveau"]
             dv_used = st.session_state.perso.get("hit_dice_used", 0)
             
-            # Correction V21 : Titre complet
             cdv_titre, cdv_btn = st.columns([1, 1])
-            cdv_titre.markdown(f"### 🎲 Dés de Vie ({die_type})")
+            cdv_titre.markdown(f"### 🎲 ({die_type})")
             
             dv_restants = dv_max - dv_used
             st.caption(f"Restants : {dv_restants} / {dv_max}")
@@ -323,7 +381,6 @@ else:
 
     st.divider()
     
-    # --- ONGLETS ---
     tab_spells, tab_feats, tab_items = st.tabs(["🔮 Sorts", "⚔️ Compétences", "🎒 Inventaire"])
 
     with tab_spells:
