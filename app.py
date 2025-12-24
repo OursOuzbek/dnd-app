@@ -6,7 +6,7 @@ from pathlib import Path
 import math
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="D&D Manager V23", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="D&D Manager V25", page_icon="🐉", layout="wide")
 
 # --- CONNEXION HYBRIDE ---
 SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -147,7 +147,6 @@ def cb_apply_xp_gain():
     if nb_joueurs > 0:
         gain = math.ceil(total / nb_joueurs)
         st.session_state.perso["xp"] += gain
-        # FIX V23 : On force la mise à jour du widget XP pour que l'affichage suive
         st.session_state["widget_xp_val"] = st.session_state.perso["xp"]
         make_dirty()
         st.toast(f"Gain de {gain} XP appliqué !")
@@ -237,8 +236,18 @@ def dialog_repos(type_repos):
             for lvl in st.session_state.perso["spells"]:
                 st.session_state.perso["spells"][lvl]["actuel"] = st.session_state.perso["spells"][lvl]["max"]
             st.session_state.perso["hit_dice_used"] = 0
+            
+            # --- FIX V25: Reset et Sync des Widgets HP ---
             st.session_state.perso["hp"]["actuel"] = st.session_state.perso["hp"]["max"]
             st.session_state.perso["hp"]["temp"] = 0
+            
+            # On force la mise à jour visuelle des widgets
+            if "w_clean_['hp', 'actuel']" in st.session_state:
+                st.session_state["w_clean_['hp', 'actuel']"] = st.session_state.perso["hp"]["max"]
+            if "w_clean_['hp', 'temp']" in st.session_state:
+                st.session_state["w_clean_['hp', 'temp']"] = 0
+            # ---------------------------------------------
+            
             st.toast("Repos long terminé")
         st.rerun()
     if col2.button("Annuler"): st.rerun()
@@ -305,8 +314,6 @@ else:
     st.divider()
 
     # --- INFOS COMPACTES (V23) ---
-    # Nouvelle répartition pour serrer les boulons
-    # Nom (1.5) | Race (1) | Classe (1) | Niv (0.8) | XP (1.7) | BM (0.5)
     col1, col2, col3, col4, col5, col6 = st.columns([1.5, 1, 1, 0.8, 1.7, 0.5])
     def dirty_callback(): make_dirty()
     
@@ -319,20 +326,17 @@ else:
 
     with col4: compteur_propre("Niveau", ["infos", "niveau"], 1, 20)
     
-    # --- SECTION XP ALIGNÉE ---
+    # --- SECTION XP ---
     with col5:
         lvl_actuel = st.session_state.perso["infos"]["niveau"]
         xp_target = XP_TABLE.get(lvl_actuel, "MAX")
         
-        # On divise la colonne XP en deux sous-blocs serrés : [Input XP (80%)] [Bouton (20%)]
         cx_in, cx_btn = st.columns([4, 1])
-        
         with cx_in:
             st.number_input(f"XP (Palier: {xp_target})", value=st.session_state.perso["xp"], 
                             key="widget_xp_val", on_change=cb_xp_input)
         with cx_btn:
-            # Astuce pour aligner le bouton avec l'input (car le label prend de la place)
-            st.write("") # Petit espace vertical
+            st.write("") 
             st.write("") 
             if st.button("⚡", help="Calculer gain d'XP"):
                 dialog_xp()
@@ -354,6 +358,7 @@ else:
             cur = st.session_state.perso["hp"]["actuel"]
             max_pv = st.session_state.perso["hp"]["max"]
             if max_pv > 0:
+                # FIX V24 : Clamp PV pour éviter le crash
                 ratio = float(cur) / float(max_pv)
                 st.progress(max(0.0, min(1.0, ratio)))
 
@@ -369,7 +374,8 @@ else:
             
             dv_restants = dv_max - dv_used
             st.caption(f"Restants : {dv_restants} / {dv_max}")
-            st.progress(dv_restants / dv_max if dv_max > 0 else 0)
+            # FIX V24 : Clamp DV
+            st.progress(max(0.0, min(1.0, dv_restants / dv_max if dv_max > 0 else 0)))
             
             b_use, b_recup = st.columns(2)
             b_use.button("Utiliser", on_click=cb_update_dv, args=(1, dv_max), disabled=(dv_used >= dv_max), use_container_width=True)
@@ -449,7 +455,10 @@ else:
                         badges = f"({feat['repos']})"
                         if feat.get("linked_pb"): badges += " [BM]"
                         c1.write(f"**{feat['nom']}** {badges}")
-                        if feat['max'] > 0: c1.progress(feat['actuel'] / feat['max'])
+                        # FIX V24 : Clamp Compétences
+                        if feat['max'] > 0: 
+                            ratio = feat['actuel'] / feat['max']
+                            c1.progress(max(0.0, min(1.0, ratio)))
                         c_min.button("➖", key=f"fm_{i}", on_click=cb_update_feat, args=(i, -1), disabled=(feat['actuel']==0))
                         c_val.write(f"{feat['actuel']} / {feat['max']}")
                         c_plus.button("➕", key=f"fp_{i}", on_click=cb_update_feat, args=(i, 1), disabled=(feat['actuel']==feat['max']))
@@ -483,7 +492,10 @@ else:
                 with c_main:
                     c1, c_min, c_val, c_plus, c_del = st.columns([4, 0.7, 1, 0.7, 0.5])
                     c1.write(f"**{item['nom']}** ({item['repos']})")
-                    if item['max'] > 0: c1.progress(item['actuel'] / item['max'])
+                    # FIX V24 : Clamp Items
+                    if item['max'] > 0: 
+                        ratio = item['actuel'] / item['max']
+                        c1.progress(max(0.0, min(1.0, ratio)))
                     c_min.button("➖", key=f"im_{i}", on_click=cb_update_item, args=(i, -1), disabled=(item['actuel']==0))
                     c_val.write(f"{item['actuel']} / {item['max']}")
                     c_plus.button("➕", key=f"ip_{i}", on_click=cb_update_item, args=(i, 1), disabled=(item['actuel']==item['max']))
