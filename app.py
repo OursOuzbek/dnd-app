@@ -59,16 +59,60 @@ def charger_donnees():
         return db
     except: return {}
 
-def sauvegarder_donnees(data):
+def sauvegarder_perso_cloud(nom, perso_data):
     if sheet is None: return
     try:
-        rows = [["NOM_PERSO", "DATA_JSON"]]
-        for nom, p_data in data.items():
-            rows.append([nom, json.dumps(p_data, ensure_ascii=False)])
-        sheet.clear()
-        sheet.update(rows)
+        json_str = json.dumps(perso_data, ensure_ascii=False)
+        col_noms = sheet.col_values(1) # Récupère tous les noms de la colonne A
+        
+        if nom in col_noms:
+            # Le perso existe, on trouve sa ligne (index + 1 car l'index Python commence à 0)
+            row_index = col_noms.index(nom) + 1
+            sheet.update_cell(row_index, 2, json_str) # On met à jour uniquement sa cellule JSON
+        else:
+            # Le perso n'existe pas, on l'ajoute à la fin du tableau
+            sheet.append_row([nom, json_str])
     except Exception as e:
         st.error(f"Erreur Cloud: {e}")
+
+def supprimer_perso_cloud(nom):
+    if sheet is None: return
+    try:
+        col_noms = sheet.col_values(1)
+        if nom in col_noms:
+            row_index = col_noms.index(nom) + 1
+            sheet.delete_rows(row_index) # On supprime juste la ligne de ce perso
+    except Exception as e:
+        st.error(f"Erreur Cloud: {e}")
+
+def action_sauvegarder():
+    nom = st.session_state.perso["infos"]["nom"]
+    bm = calculer_bm(st.session_state.perso["infos"]["niveau"])
+    for f in st.session_state.perso["features"]:
+        if f.get("linked_pb", False):
+            f["max"] = bm
+            if f["actuel"] > bm: f["actuel"] = bm
+            
+    # On met à jour la mémoire locale
+    st.session_state.db[nom] = st.session_state.perso
+    
+    with st.spinner('Sauvegarde ciblée...'):
+        # On utilise notre nouvelle fonction ciblée !
+        sauvegarder_perso_cloud(nom, st.session_state.perso)
+        
+    st.session_state.current_char_id = nom
+    st.session_state.unsaved_changes = False 
+    st.toast(f"Sauvegarde Cloud réussie ! ☁️")
+    st.rerun()
+
+def action_supprimer_perso(nom_a_supprimer):
+    if nom_a_supprimer in st.session_state.db:
+        del st.session_state.db[nom_a_supprimer]
+        with st.spinner('Suppression...'):
+            # On utilise notre nouvelle fonction de suppression ciblée !
+            supprimer_perso_cloud(nom_a_supprimer)
+        st.toast(f"{nom_a_supprimer} supprimé.")
+        st.rerun()
 
 def nouveau_perso_template():
     return {
@@ -171,7 +215,6 @@ if "unsaved_changes" not in st.session_state:
 if "edit_mode" not in st.session_state:
     st.session_state.edit_mode = {}
 
-# --- ACTIONS ---
 def action_sauvegarder():
     nom = st.session_state.perso["infos"]["nom"]
     bm = calculer_bm(st.session_state.perso["infos"]["niveau"])
@@ -179,9 +222,14 @@ def action_sauvegarder():
         if f.get("linked_pb", False):
             f["max"] = bm
             if f["actuel"] > bm: f["actuel"] = bm
+            
+    # On met à jour la mémoire locale
     st.session_state.db[nom] = st.session_state.perso
-    with st.spinner('Sauvegarde...'):
-        sauvegarder_donnees(st.session_state.db)
+    
+    with st.spinner('Sauvegarde ciblée...'):
+        # C'EST ICI LA MAGIE : on appelle la nouvelle fonction !
+        sauvegarder_perso_cloud(nom, st.session_state.perso)
+        
     st.session_state.current_char_id = nom
     st.session_state.unsaved_changes = False 
     st.toast(f"Sauvegarde Cloud réussie ! ☁️")
