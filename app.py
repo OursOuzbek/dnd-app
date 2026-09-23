@@ -1,33 +1,40 @@
 import streamlit as st
 import json
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 from pathlib import Path
 import math
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="D&D Manager V25", page_icon="🐉", layout="wide")
 
-# --- CONNEXION HYBRIDE ---
-SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+# --- CONNEXION HYBRIDE GOOGLE SHEETS ---
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-@st.cache_resource
+@st.cache_resource(ttl=3600)
 def init_connection():
-    try:
-        local_key = Path("service_account.json")
-        if local_key.is_file():
-            creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", SCOPE)
-        elif "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
-        else:
-            return None
-        client = gspread.authorize(creds)
-        sheet = client.open("DndData").sheet1
-        return sheet
-    except: return None
+    """Initialise la connexion avec Google Sheets via google-auth (renouvelé automatiquement)."""
+    local_key = Path("service_account.json")
+    if local_key.is_file():
+        creds = Credentials.from_service_account_file("service_account.json", scopes=SCOPE)
+    elif "gcp_service_account" in st.secrets:
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+    else:
+        st.warning("⚠️ Clé de compte de service introuvable (local ou secrets).")
+        return None
+    client = gspread.authorize(creds)
+    return client.open("DndData").sheet1
 
-sheet = init_connection()
+def get_sheet():
+    """Récupère l'accès à la feuille en gérant les erreurs réseau ou de réveil."""
+    try:
+        return init_connection()
+    except Exception as e:
+        st.error(f"Erreur de connexion Cloud : {e}")
+        return None
 
 # --- CONSTANTES ---
 CLASSES_DATA = {
@@ -48,27 +55,36 @@ XP_TABLE = {
 
 # --- FONCTIONS BACKEND ---
 def charger_donnees():
-    if sheet is None: return {}
+    sheet = get_sheet()
+    if sheet is None:
+        return {}
     try:
         records = sheet.get_all_values()
         db = {}
         for row in records[1:]:
             if len(row) >= 2:
-                try: db[row[0]] = json.loads(row[1])
-                except: pass
+                try:
+                    db[row[0]] = json.loads(row[1])
+                except json.JSONDecodeError:
+                    pass
         return db
-    except: return {}
+    except Exception as e:
+        st.error(f"Erreur chargement Cloud : {e}")
+        return {}
 
 def sauvegarder_perso_cloud(nom, perso_data):
-    if sheet is None: return
+    sheet = get_sheet()
+    if sheet is None:
+        st.error("Impossible de sauvegarder : non connecté à Google Sheets.")
+        return
     try:
         json_str = json.dumps(perso_data, ensure_ascii=False)
-        col_noms = sheet.col_values(1) # Récupère tous les noms de la colonne A
+        col_noms = sheet.col_values(1)  # Récupère tous les noms de la colonne A
         
         if nom in col_noms:
             # Le perso existe, on trouve sa ligne (index + 1 car l'index Python commence à 0)
             row_index = col_noms.index(nom) + 1
-            sheet.update_cell(row_index, 2, json_str) # On met à jour uniquement sa cellule JSON
+            sheet.update_cell(row_index, 2, json_str)  # On met à jour uniquement sa cellule JSON
         else:
             # Le perso n'existe pas, on l'ajoute à la fin du tableau
             sheet.append_row([nom, json_str])
@@ -76,12 +92,15 @@ def sauvegarder_perso_cloud(nom, perso_data):
         st.error(f"Erreur Cloud: {e}")
 
 def supprimer_perso_cloud(nom):
-    if sheet is None: return
+    sheet = get_sheet()
+    if sheet is None:
+        st.error("Impossible de supprimer : non connecté à Google Sheets.")
+        return
     try:
         col_noms = sheet.col_values(1)
         if nom in col_noms:
             row_index = col_noms.index(nom) + 1
-            sheet.delete_rows(row_index) # On supprime juste la ligne de ce perso
+            sheet.delete_rows(row_index)  # On supprime juste la ligne de ce perso
     except Exception as e:
         st.error(f"Erreur Cloud: {e}")
 
@@ -91,28 +110,32 @@ def action_sauvegarder():
     for f in st.session_state.perso["features"]:
         if f.get("linked_pb", False):
             f["max"] = bm
-            if f["actuel"] > bm: f["actuel"] = bm
+            if f["actuel"] > bm:
+                f["actuel"] = bm
             
     # On met à jour la mémoire locale
     st.session_state.db[nom] = st.session_state.perso
     
     with st.spinner('Sauvegarde ciblée...'):
-        # On utilise notre nouvelle fonction ciblée !
         sauvegarder_perso_cloud(nom, st.session_state.perso)
         
     st.session_state.current_char_id = nom
     st.session_state.unsaved_changes = False 
-    st.toast(f"Sauvegarde Cloud réussie ! ☁️")
+    st.toast("Sauvegarde Cloud réussie ! ☁️")
     st.rerun()
 
 def action_supprimer_perso(nom_a_supprimer):
     if nom_a_supprimer in st.session_state.db:
         del st.session_state.db[nom_a_supprimer]
         with st.spinner('Suppression...'):
-            # On utilise notre nouvelle fonction de suppression ciblée !
             supprimer_perso_cloud(nom_a_supprimer)
         st.toast(f"{nom_a_supprimer} supprimé.")
         st.rerun()
+
+def action_quitter_sans_sauver():
+    st.session_state.current_char_id = None
+    st.session_state.unsaved_changes = False
+    st.rerun()
 
 def nouveau_perso_template():
     return {
@@ -136,7 +159,8 @@ def make_dirty():
 def cb_manual_input(keys_path, widget_key):
     val = st.session_state[widget_key]
     ref = st.session_state.perso
-    for key in keys_path[:-1]: ref = ref[key]
+    for key in keys_path[:-1]:
+        ref = ref[key]
     ref[keys_path[-1]] = val
     make_dirty()
 
@@ -198,7 +222,8 @@ def cb_apply_xp_gain():
 # --- COMPOSANTS VISUELS ---
 def compteur_propre(label, keys_path, min_val=0, max_val=1000):
     val = st.session_state.perso
-    for k in keys_path: val = val[k]
+    for k in keys_path:
+        val = val[k]
     widget_key = f"w_clean_{keys_path}"
     st.number_input(label, value=val, min_value=min_val, max_value=max_val, 
                     key=widget_key, on_change=cb_manual_input, args=(keys_path, widget_key))
@@ -215,53 +240,24 @@ if "unsaved_changes" not in st.session_state:
 if "edit_mode" not in st.session_state:
     st.session_state.edit_mode = {}
 
-def action_sauvegarder():
-    nom = st.session_state.perso["infos"]["nom"]
-    bm = calculer_bm(st.session_state.perso["infos"]["niveau"])
-    for f in st.session_state.perso["features"]:
-        if f.get("linked_pb", False):
-            f["max"] = bm
-            if f["actuel"] > bm: f["actuel"] = bm
-            
-    # On met à jour la mémoire locale
-    st.session_state.db[nom] = st.session_state.perso
-    
-    with st.spinner('Sauvegarde ciblée...'):
-        # C'EST ICI LA MAGIE : on appelle la nouvelle fonction !
-        sauvegarder_perso_cloud(nom, st.session_state.perso)
-        
-    st.session_state.current_char_id = nom
-    st.session_state.unsaved_changes = False 
-    st.toast(f"Sauvegarde Cloud réussie ! ☁️")
-    st.rerun()
-
-def action_supprimer_perso(nom_a_supprimer):
-    if nom_a_supprimer in st.session_state.db:
-        del st.session_state.db[nom_a_supprimer]
-        with st.spinner('Suppression...'):
-            sauvegarder_donnees(st.session_state.db)
-        st.toast(f"{nom_a_supprimer} supprimé.")
-        st.rerun()
-
-def action_quitter_sans_sauver():
-    st.session_state.current_char_id = None
-    st.session_state.unsaved_changes = False
-    st.rerun()
-
 # --- MODALES ---
 @st.dialog("Confirmer la suppression")
 def dialog_suppression(nom_perso):
     st.warning(f"Supprimer **{nom_perso}** ?")
     col1, col2 = st.columns(2)
-    if col1.button("🗑️ Oui", type="primary"): action_supprimer_perso(nom_perso)
-    if col2.button("Annuler"): st.rerun()
+    if col1.button("🗑️ Oui", type="primary"):
+        action_supprimer_perso(nom_perso)
+    if col2.button("Annuler"):
+        st.rerun()
 
 @st.dialog("Quitter sans sauvegarder ?")
 def dialog_confirm_exit():
     st.warning("Modifs non enregistrées.")
     col1, col2 = st.columns(2)
-    if col1.button("Quitter"): action_quitter_sans_sauver()
-    if col2.button("Rester"): st.rerun()
+    if col1.button("Quitter"):
+        action_quitter_sans_sauver()
+    if col2.button("Rester"):
+        st.rerun()
 
 @st.dialog("Repos")
 def dialog_repos(type_repos):
@@ -270,14 +266,17 @@ def dialog_repos(type_repos):
     if col1.button("✅ Valider", type="primary"):
         if type_repos == "Court":
             for f in st.session_state.perso["features"]:
-                if f["repos"] == "Court": f["actuel"] = f["max"]
+                if f["repos"] == "Court":
+                    f["actuel"] = f["max"]
             for i in st.session_state.perso["items"]:
-                if i["repos"] == "Court": i["actuel"] = i["max"]
+                if i["repos"] == "Court":
+                    i["actuel"] = i["max"]
             st.toast("Repos court terminé")
         else:
             bm = calculer_bm(st.session_state.perso["infos"]["niveau"])
             for f in st.session_state.perso["features"]: 
-                if f.get("linked_pb", False): f["max"] = bm
+                if f.get("linked_pb", False):
+                    f["max"] = bm
                 f["actuel"] = f["max"]
             for i in st.session_state.perso["items"]: 
                 i["actuel"] = i["max"]
@@ -285,7 +284,7 @@ def dialog_repos(type_repos):
                 st.session_state.perso["spells"][lvl]["actuel"] = st.session_state.perso["spells"][lvl]["max"]
             st.session_state.perso["hit_dice_used"] = 0
             
-            # --- FIX V25: Reset et Sync des Widgets HP ---
+            # Reset et Sync des Widgets HP
             st.session_state.perso["hp"]["actuel"] = st.session_state.perso["hp"]["max"]
             st.session_state.perso["hp"]["temp"] = 0
             
@@ -294,11 +293,11 @@ def dialog_repos(type_repos):
                 st.session_state["w_clean_['hp', 'actuel']"] = st.session_state.perso["hp"]["max"]
             if "w_clean_['hp', 'temp']" in st.session_state:
                 st.session_state["w_clean_['hp', 'temp']"] = 0
-            # ---------------------------------------------
             
             st.toast("Repos long terminé")
         st.rerun()
-    if col2.button("Annuler"): st.rerun()
+    if col2.button("Annuler"):
+        st.rerun()
 
 @st.dialog("Calcul Gain XP ⚡")
 def dialog_xp():
@@ -325,15 +324,21 @@ if st.session_state.current_char_id is None:
             for p_nom in liste_persos:
                 with st.container(border=True):
                     c1, c2, c3 = st.columns([4, 1, 1])
-                    info_p = st.session_state.db[p_nom]['infos']
-                    c1.markdown(f"**{p_nom}** - {info_p['classe']} {info_p['niveau']}")
+                    info_p = st.session_state.db[p_nom].get('infos', {})
+                    classe_p = info_p.get('classe', 'Inconnue')
+                    niveau_p = info_p.get('niveau', 1)
+                    c1.markdown(f"**{p_nom}** - {classe_p} {niveau_p}")
                     if c2.button("📂", key=f"load_{p_nom}", help="Charger"):
                         st.session_state.perso = json.loads(json.dumps(st.session_state.db[p_nom]))
                         st.session_state.current_char_id = p_nom
                         st.rerun()
                     if c3.button("🗑️", key=f"del_{p_nom}", help="Supprimer"):
                         dialog_suppression(p_nom)
-        else: st.info("Aucun personnage.")
+        else:
+            st.info("Aucun personnage disponible.")
+            if st.button("🔄 Rafraîchir les données Cloud"):
+                st.session_state.db = charger_donnees()
+                st.rerun()
 
     with col_d:
         st.subheader("Création")
@@ -344,26 +349,33 @@ if st.session_state.current_char_id is None:
                 st.session_state.perso["infos"]["nom"] = nom_new
                 st.session_state.current_char_id = nom_new
                 action_sauvegarder() 
-            elif nom_new in st.session_state.db: st.error("Existe déjà !")
+            elif nom_new in st.session_state.db:
+                st.error("Existe déjà !")
 
 else:
-    if "hp" not in st.session_state.perso: st.session_state.perso["hp"] = {"max": 10, "actuel": 10, "temp": 0}
-    if "xp" not in st.session_state.perso: st.session_state.perso["xp"] = 0
+    if "hp" not in st.session_state.perso:
+        st.session_state.perso["hp"] = {"max": 10, "actuel": 10, "temp": 0}
+    if "xp" not in st.session_state.perso:
+        st.session_state.perso["xp"] = 0
 
     c_back, c_empty, c_save = st.columns([1, 4, 1])
     if c_back.button("⬅️ Accueil"):
-        if st.session_state.unsaved_changes: dialog_confirm_exit()
-        else: action_quitter_sans_sauver()
+        if st.session_state.unsaved_changes:
+            dialog_confirm_exit()
+        else:
+            action_quitter_sans_sauver()
     
     btn_label = "Sauvegarder *" if st.session_state.unsaved_changes else "Sauvegarder"
     btn_type = "primary" if st.session_state.unsaved_changes else "secondary"
-    if c_save.button(btn_label, type=btn_type, use_container_width=True): action_sauvegarder()
+    if c_save.button(btn_label, type=btn_type, use_container_width=True):
+        action_sauvegarder()
 
     st.divider()
 
-    # --- INFOS COMPACTES (V23) ---
+    # --- INFOS COMPACTES ---
     col1, col2, col3, col4, col5, col6 = st.columns([1.5, 1, 1, 0.8, 1.7, 0.5])
-    def dirty_callback(): make_dirty()
+    def dirty_callback():
+        make_dirty()
     
     st.session_state.perso["infos"]["nom"] = col1.text_input("Nom", st.session_state.perso["infos"]["nom"], on_change=dirty_callback)
     st.session_state.perso["infos"]["race"] = col2.text_input("Race", st.session_state.perso["infos"]["race"], on_change=dirty_callback)
@@ -372,7 +384,8 @@ else:
     idx_class = LISTE_CLASSES.index(current_class_val) if current_class_val in LISTE_CLASSES else 0
     col3.selectbox("Classe", LISTE_CLASSES, index=idx_class, key="widget_classe", on_change=cb_change_classe)
 
-    with col4: compteur_propre("Niveau", ["infos", "niveau"], 1, 20)
+    with col4:
+        compteur_propre("Niveau", ["infos", "niveau"], 1, 20)
     
     # --- SECTION XP ---
     with col5:
@@ -399,14 +412,16 @@ else:
         with st.container(border=True):
             st.markdown("### ❤️ Points de Vie")
             hp1, hp2, hp3 = st.columns(3)
-            with hp1: compteur_propre("Max", ["hp", "max"], 1, 999)
-            with hp2: compteur_propre("Actuel", ["hp", "actuel"], -999, 999)
-            with hp3: compteur_propre("Temp", ["hp", "temp"], 0, 999)
+            with hp1:
+                compteur_propre("Max", ["hp", "max"], 1, 999)
+            with hp2:
+                compteur_propre("Actuel", ["hp", "actuel"], -999, 999)
+            with hp3:
+                compteur_propre("Temp", ["hp", "temp"], 0, 999)
 
             cur = st.session_state.perso["hp"]["actuel"]
             max_pv = st.session_state.perso["hp"]["max"]
             if max_pv > 0:
-                # FIX V24 : Clamp PV pour éviter le crash
                 ratio = float(cur) / float(max_pv)
                 st.progress(max(0.0, min(1.0, ratio)))
 
@@ -422,7 +437,6 @@ else:
             
             dv_restants = dv_max - dv_used
             st.caption(f"Restants : {dv_restants} / {dv_max}")
-            # FIX V24 : Clamp DV
             st.progress(max(0.0, min(1.0, dv_restants / dv_max if dv_max > 0 else 0)))
             
             b_use, b_recup = st.columns(2)
@@ -430,8 +444,10 @@ else:
             b_recup.button("Récup.", on_click=cb_update_dv, args=(-1, dv_max), disabled=(dv_used <= 0), use_container_width=True)
 
     c_rest1, c_rest2 = st.columns(2)
-    if c_rest1.button("🍎 Repos Court", use_container_width=True): dialog_repos("Court")
-    if c_rest2.button("💤 Repos Long", type="primary", use_container_width=True): dialog_repos("Long")
+    if c_rest1.button("🍎 Repos Court", use_container_width=True):
+        dialog_repos("Court")
+    if c_rest2.button("💤 Repos Long", type="primary", use_container_width=True):
+        dialog_repos("Long")
 
     st.divider()
     
@@ -452,7 +468,8 @@ else:
                     with st.container(border=True):
                         st.write(f"**Niveau {lvl}**")
                         old_max = st.session_state.perso["spells"][lvl_str]["max"]
-                        def on_change_max_spell(): make_dirty()
+                        def on_change_max_spell():
+                            make_dirty()
                         new_max = st.number_input("Max", 0, 4, value=old_max, key=f"smx_{lvl}", on_change=on_change_max_spell)
                         st.session_state.perso["spells"][lvl_str]["max"] = new_max
                         if st.session_state.perso["spells"][lvl_str]["actuel"] > new_max:
@@ -501,9 +518,9 @@ else:
                     with c_main:
                         c1, c_min, c_val, c_plus, c_edit, c_del = st.columns([4, 0.7, 1, 0.7, 0.5, 0.5])
                         badges = f"({feat['repos']})"
-                        if feat.get("linked_pb"): badges += " [BM]"
+                        if feat.get("linked_pb"):
+                            badges += " [BM]"
                         c1.write(f"**{feat['nom']}** {badges}")
-                        # FIX V24 : Clamp Compétences
                         if feat['max'] > 0: 
                             ratio = feat['actuel'] / feat['max']
                             c1.progress(max(0.0, min(1.0, ratio)))
@@ -518,9 +535,11 @@ else:
                             make_dirty()
                             st.rerun()
                     with c_up:
-                        if i > 0: st.button("⬆️", key=f"f_up_{i}", on_click=cb_move_item, args=("features", i, -1))
+                        if i > 0:
+                            st.button("⬆️", key=f"f_up_{i}", on_click=cb_move_item, args=("features", i, -1))
                     with c_down:
-                        if i < len(feats) - 1: st.button("⬇️", key=f"f_down_{i}", on_click=cb_move_item, args=("features", i, 1))
+                        if i < len(feats) - 1:
+                            st.button("⬇️", key=f"f_down_{i}", on_click=cb_move_item, args=("features", i, 1))
 
     with tab_items:
         with st.expander("Ajouter Objet"):
@@ -533,14 +552,14 @@ else:
                 make_dirty()
                 st.rerun()
         items = st.session_state.perso["items"]
-        if not items: st.info("Inventaire vide.")
+        if not items:
+            st.info("Inventaire vide.")
         for i, item in enumerate(items):
             with st.container(border=True):
                 c_main, c_up, c_down = st.columns([10, 1, 1])
                 with c_main:
                     c1, c_min, c_val, c_plus, c_del = st.columns([4, 0.7, 1, 0.7, 0.5])
                     c1.write(f"**{item['nom']}** ({item['repos']})")
-                    # FIX V24 : Clamp Items
                     if item['max'] > 0: 
                         ratio = item['actuel'] / item['max']
                         c1.progress(max(0.0, min(1.0, ratio)))
@@ -552,6 +571,8 @@ else:
                         make_dirty()
                         st.rerun()
                 with c_up:
-                    if i > 0: st.button("⬆️", key=f"i_up_{i}", on_click=cb_move_item, args=("items", i, -1))
+                    if i > 0:
+                        st.button("⬆️", key=f"i_up_{i}", on_click=cb_move_item, args=("items", i, -1))
                 with c_down:
-                    if i < len(items) - 1: st.button("⬇️", key=f"i_down_{i}", on_click=cb_move_item, args=("items", i, 1))
+                    if i < len(items) - 1:
+                        st.button("⬇️", key=f"i_down_{i}", on_click=cb_move_item, args=("items", i, 1))
