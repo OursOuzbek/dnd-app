@@ -219,13 +219,27 @@ def cb_apply_xp_gain():
         make_dirty()
         st.toast(f"Gain de {gain} XP appliqué !")
 
+def cb_change_hp(field, delta):
+    """Modifie les PV (actuel ou temp) via bouton sans aucun risque de rollback."""
+    new_val = st.session_state.perso["hp"][field] + delta
+    if field == "temp" and new_val < 0:
+        new_val = 0
+    st.session_state.perso["hp"][field] = new_val
+    w_key = f"w_clean_['hp', '{field}']"
+    if w_key in st.session_state:
+        st.session_state[w_key] = new_val
+    make_dirty()
+
 # --- COMPOSANTS VISUELS ---
 def compteur_propre(label, keys_path, min_val=0, max_val=1000):
     val = st.session_state.perso
     for k in keys_path:
         val = val[k]
     widget_key = f"w_clean_{keys_path}"
-    st.number_input(label, value=val, min_value=min_val, max_value=max_val, 
+    # Synchronisation propre sans écrasement conflictuel de value
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = val
+    st.number_input(label, min_value=min_val, max_value=max_val, 
                     key=widget_key, on_change=cb_manual_input, args=(keys_path, widget_key))
 
 # --- GESTION ÉTAT ---
@@ -331,6 +345,9 @@ if st.session_state.current_char_id is None:
                     if c2.button("📂", key=f"load_{p_nom}", help="Charger"):
                         st.session_state.perso = json.loads(json.dumps(st.session_state.db[p_nom]))
                         st.session_state.current_char_id = p_nom
+                        for k in list(st.session_state.keys()):
+                            if k.startswith("w_clean_"):
+                                del st.session_state[k]
                         st.rerun()
                     if c3.button("🗑️", key=f"del_{p_nom}", help="Supprimer"):
                         dialog_suppression(p_nom)
@@ -348,6 +365,9 @@ if st.session_state.current_char_id is None:
                 st.session_state.perso = nouveau_perso_template()
                 st.session_state.perso["infos"]["nom"] = nom_new
                 st.session_state.current_char_id = nom_new
+                for k in list(st.session_state.keys()):
+                    if k.startswith("w_clean_"):
+                        del st.session_state[k]
                 action_sauvegarder() 
             elif nom_new in st.session_state.db:
                 st.error("Existe déjà !")
@@ -416,8 +436,14 @@ else:
                 compteur_propre("Max", ["hp", "max"], 1, 999)
             with hp2:
                 compteur_propre("Actuel", ["hp", "actuel"], -999, 999)
+                b_m, b_p = st.columns(2)
+                b_m.button("➖", key="btn_sub_hp", on_click=cb_change_hp, args=("actuel", -1), use_container_width=True)
+                b_p.button("➕", key="btn_add_hp", on_click=cb_change_hp, args=("actuel", 1), use_container_width=True)
             with hp3:
                 compteur_propre("Temp", ["hp", "temp"], 0, 999)
+                b_tm, b_tp = st.columns(2)
+                b_tm.button("➖", key="btn_sub_temp", on_click=cb_change_hp, args=("temp", -1), use_container_width=True)
+                b_tp.button("➕", key="btn_add_temp", on_click=cb_change_hp, args=("temp", 1), use_container_width=True)
 
             cur = st.session_state.perso["hp"]["actuel"]
             max_pv = st.session_state.perso["hp"]["max"]
